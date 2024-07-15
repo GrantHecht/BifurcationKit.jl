@@ -8,6 +8,8 @@ module BifurcationKit
     using RecursiveArrayTools: VectorOfArray
     using DocStringExtensions
     using DataStructures: CircularBuffer # used for Polynomial predictor
+    using LinearSolve
+    using NonlinearSolve
     using ForwardDiff
 
 

@@ -1,4 +1,5 @@
 using IterativeSolvers, LinearAlgebra
+using LinearSolve
 import KrylovKit: linsolve, KrylovDefaults # prevent from loading residual
 norminf(x) = LinearAlgebra.norm(x, Inf)
 
@@ -7,6 +8,7 @@ norminf(x) = LinearAlgebra.norm(x, Inf)
 abstract type AbstractLinearSolver end
 abstract type AbstractDirectLinearSolver <: AbstractLinearSolver end
 abstract type AbstractIterativeLinearSolver <: AbstractLinearSolver end
+abstract type AbstractSciMLLinearSolver <: AbstractLinearSolver end
 
 # The function linsolve(J, x; kwargs...) must return whether the solve was successful and how many steps were required for the solve.
 

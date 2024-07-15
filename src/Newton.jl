@@ -67,16 +67,29 @@ end
 function _newton(prob::AbstractBifurcationProblem, x0, p0, options::NewtonPar;
                     normN = norm,
                     callback = cb_default,
+                    sciml_linsolve = SVDFactorization(),
+                    linesearch = RobustNonMonotoneLineSearch(),
                     kwargs...)
     # Extract parameters
     @unpack tol, max_iterations, verbose = options
 
-    x = _copy(x0)
-    fx = residual(prob, x, p0)
-    u = _copy(fx)
+    # Formulate the porblem
+    nlp = NonlinearProblem{false}(
+        NonlinearFunction{false, SciMLBase.FullSpecialize}(
+            (x,p) -> residual(prob, x, p0); jac = (x,p) -> jacobian(prob, x, p0),
+        ),
+        x0,
+        nothing,
+    )
 
-    res = normN(fx)
-    residuals = [res]
+    # Form NewtonRaphson solver
+    newton_solver = NewtonRaphson(; linsolve = sciml_linsolve, linesearch = linesearch)
+
+    # Initialize the solver cache
+    nlcache = NonlinearSolve.init(
+        nlp, newton_solver;
+        maxiters = 1000,
+    )
 
     # newton step
     step = 0
@@ -84,34 +97,31 @@ function _newton(prob::AbstractBifurcationProblem, x0, p0, options::NewtonPar;
     # total number of linear iterations
     itlineartot = 0
 
+    res = normN(nlcache.fu)
+    residuals = [res]
     verbose && print_nonlinear_step(step, res)
 
     # invoke callback before algo really starts
-    compute = callback((; x, fx, nothing, residual = res, step, options, x0, residuals); fromNewton = true, kwargs...)
+    compute = callback((; nlcache.u, nlcache.fu, nothing, residual = res, step, options, x0, residuals); fromNewton = true, kwargs...)
 
     while (step < max_iterations) && (res > tol) && compute
-        J = jacobian(prob, x, p0)
-        u, cv, itlinear = options.linsolver(J, fx)
-        ~cv && @debug "Linear solver for J did not converge."
-        itlineartot += sum(itlinear)
+        # Step solver
+        NonlinearSolve.step!(nlcache)
 
-        # x = x - J \ fx
-        minus!(x, u)
-
-        fx = residual(prob, x, p0)
-        res = normN(fx)
-
+        # Get residual norm and step
+        res = normN(nlcache.fu)
         push!(residuals, res)
         step += 1
 
+        itlinear = 1
         verbose && print_nonlinear_step(step, res, itlinear)
 
-        compute = callback((;x, fx, J, residual=res, step, itlinear, options, x0, residuals); fromNewton = true, kwargs...)
+        compute = callback((;nlcache.u, nlcache.fu, nlcache.J, residual=res, step, itlinear, options, x0, residuals); fromNewton = true, kwargs...)
     end
     ((residuals[end] > tol) && verbose) && @error("\n──> Newton algorithm failed to converge, residual = $(residuals[end])")
-    flag = (residuals[end] < tol) & callback((;x, fx, residual=res, step, options, x0, residuals); fromNewton = true, kwargs...)
+    flag = (residuals[end] < tol) & callback((;nlcache.u, nlcache.fu, residual=res, step, options, x0, residuals); fromNewton = true, kwargs...)
     verbose && print_nonlinear_step(0, res, 0, true) # display last line of the table
-    return NonLinearSolution(x, prob, residuals, flag, step, itlineartot)
+    return NonLinearSolution(nlcache.u, prob, residuals, flag, step, itlineartot)
 end
 
 """

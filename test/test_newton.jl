@@ -13,7 +13,7 @@ function test_newton(x0)
         J0
     end
 
-    opts = NewtonPar( tol = Ty(1e-8), verbose = false)
+    opts = NewtonPar( tol = Ty(1e-8), verbose = true)
     prob = BifurcationProblem(F, x0, nothing; J = Jac)
     newton(prob, opts; callback = BK.cbMaxNorm(100.0), normN = x->norm(x,Inf))
 end
