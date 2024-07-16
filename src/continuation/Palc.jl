@@ -23,14 +23,14 @@ DotTheta() = DotTheta( (x, y) -> dot(x, y) / length(x), x -> rmul!(x, 1/length(x
 DotTheta(dt) = DotTheta(dt, nothing)
 
 # we restrict the type of the parameters because for complex problems, we still want the parameter to be real
-(dt::DotTheta)(u1, u2, p1::T, p2::T, θ::T) where {T <: Real} = real(dt.dot(u1, u2) * θ + p1 * p2 * (one(T) - θ))
+(dt::DotTheta)(u1, u2, p1, p2, θ::T) where {T <: Real} = real(dt.dot(u1, u2) * θ + p1 * p2 * (one(T) - θ))
 
 # Implementation of the norm associated to DotTheta
 # we restrict the type of the parameters because for complex problems, we still want the parameter to be real
-(dt::DotTheta)(u, p::T, θ::T) where T = sqrt(dt(u, u, p, p, θ))
+(dt::DotTheta)(u, p, θ) = sqrt(dt(u, u, p, p, θ))
 
-(dt::DotTheta)(a::BorderedArray{vec, T}, b::BorderedArray{vec, T}, θ::T) where {vec, T} = dt(a.u, b.u, a.p, b.p, θ)
-(dt::DotTheta)(a::BorderedArray{vec, T}, θ::T) where {vec, T} = dt(a.u, a.p, θ)
+(dt::DotTheta)(a::BorderedArray, b::BorderedArray, θ) = dt(a.u, b.u, a.p, b.p, θ)
+(dt::DotTheta)(a::BorderedArray, θ) = dt(a.u, a.p, θ)
 ####################################################################################################
 # equation of the arc length constraint
 arcLengthEq(dt::DotTheta, u, p, du, dp, θ, ds) = dt(u, du, p, dp, θ) - ds
@@ -393,7 +393,7 @@ function newton_palc(iter::AbstractContinuationIterable,
     nlp = NonlinearProblem{false}(
         NonlinearFunction{false, SciMLBase.FullSpecialize}(
             (u, p) -> palc_func(u, iter, state, dotθ); 
-            jac = (u, p) -> palc_jac(u, iter, state),
+            #jac = (u, p) -> palc_jac(u, iter, state),
         ),
         [state.z_pred.u; state.z_pred.p],
         nothing,
