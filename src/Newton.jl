@@ -67,7 +67,7 @@ end
 function _newton(prob::AbstractBifurcationProblem, x0, p0, options::NewtonPar;
                     normN = norm,
                     callback = cb_default,
-                    sciml_linsolve = SVDFactorization(),
+                    sciml_linsolve = RFLUFactorization(),
                     linesearch = RobustNonMonotoneLineSearch(),
                     kwargs...)
     # Extract parameters

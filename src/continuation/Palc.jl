@@ -380,47 +380,43 @@ function newton_palc(iter::AbstractContinuationIterable,
                     dotθ = getdot(iter);
                     normN = norm,
                     callback = cb_default,
+                    sciml_linsolve = RFLUFactorization(),
+                    sciml_linesearch = RobustNonMonotoneLineSearch(),
                     kwargs...)
-    prob = iter.prob
-    par = getparams(prob)
-    ϵ = getdelta(prob)
-    paramlens = getlens(iter)
-    contparams = getcontparams(iter)
-    T = eltype(iter)
-    θ = getθ(iter)
-
     z0 = getsolution(state)
-    τ0 = state.τ
-    @unpack z_pred, ds = state
-
+    contparams = getcontparams(iter)
+    linsolver = getlinsolver(iter)
     @unpack tol, max_iterations, verbose, α, αmin, linesearch = contparams.newton_options
     @unpack p_min, p_max = contparams
-    linsolver = getlinsolver(iter)
 
-    # record the damping parameter
-    α0 = α
+    # Formulate the problem
+    nlp = NonlinearProblem{false}(
+        NonlinearFunction{false, SciMLBase.FullSpecialize}(
+            (u, p) -> palc_func(u, iter, state, dotθ); 
+            jac = (u, p) -> palc_jac(u, iter, state),
+        ),
+        [state.z_pred.u; state.z_pred.p],
+        nothing,
+    )
 
-    # N = θ⋅dot(x - z0.u, τ0.u) + (1 - θ)⋅(p - z0.p)⋅τ0.p - ds
-    N(u, _p) = arcLengthEq(dotθ, minus(u, z0.u), _p - z0.p, τ0.u, τ0.p, θ, ds)
+    # Form NewtonRaphson solver
+    newton_solver = NewtonRaphson(; linsolve = sciml_linsolve, linesearch = sciml_linesearch)
+
+    # Initialize the solver cache
+    nlcache = NonlinearSolve.init(
+        nlp, newton_solver;
+        maxiters = 1000,
+    )
+
+    # Define norm for residual
     normAC(resf, resn) = max(normN(resf), abs(resn))
 
-    # initialise variables
-    x = _copy(z_pred.u)
-    p = z_pred.p
-    x_pred = _copy(x)
+    # Get state, parameter, residual, and arclength constraint
+    x, p = get_subvec_and_scalar(nlcache.u)
+    res_f, res_N = get_subvec_and_scalar(nlcache.fu)
 
-    res_f = residual(prob, x, _set_param(par, paramlens, p));  res_n = N(x, p)
-
-    dX = _copy(res_f)
-    dp = zero(T)
-    up = zero(T)
-
-    # dFdp = (F(x, p + ϵ) - res_f) / ϵ
-    dFdp = _copy(residual(prob, x, _set_param(par, paramlens, p + ϵ)))
-    minus!(dFdp, res_f) # dFdp = dFdp - res_f
-    rmul!(dFdp, one(T) / ϵ)
-
-    res       = normAC(res_f, res_n)
+    # Handle initial state residual
+    res       = normAC(res_f, res_N)
     residuals = [res]
     step = 0
     itlineartot = 0
@@ -431,56 +427,19 @@ function newton_palc(iter::AbstractContinuationIterable,
     compute = callback((;x, res_f, residual=res, step, contparams, z0, p, residuals, options = (;linsolver)); fromNewton = false, kwargs...)
 
     while (step < max_iterations) && (res > tol) && line_step && compute
-        # dFdp = (F(x, p + ϵ) - F(x, p)) / ϵ)
-        copyto!(dFdp, residual(prob, x, _set_param(par, paramlens, p + ϵ)))
-        minus!(dFdp, res_f); rmul!(dFdp, one(T) / ϵ)
+        # Step solver
+        NonlinearSolve.step!(nlcache)
+        itlinear = 1
 
-        # compute jacobian
-        J = jacobian(prob, x, _set_param(par, paramlens, p))
-        
-        # solve linear system
-        # ┌            ┐┌  ┐   ┌     ┐
-        # │ J     dFdp ││u │ = │res_f│
-        # │ τ0.u  τ0.p ││up│   │res_n│
-        # └            ┘└  ┘   └     ┘
-        u, up, flag, itlinear = linsolver(iter, state, J, dFdp, res_f, res_n)
-        ~flag && @debug "[newton_palc] Linear solver for J did not converge."
-        itlineartot += sum(itlinear)
+        # Get state, parameter, residual, and arclength constraint
+        x, p = get_subvec_and_scalar(nlcache.u)
+        res_f, res_N = get_subvec_and_scalar(nlcache.fu)
 
-        if linesearch
-            line_step = false
-            while !line_step && (α > αmin)
-                # x_pred = x - α * u
-                copyto!(x_pred, x); axpy!(-α, u, x_pred)
+        # Get Jacobian and dFdp
+        J, dFdp = get_submat_and_vec(nlcache.J)
 
-                p_pred = p - α * up
-                copyto!(res_f, residual(prob, x_pred, _set_param(par, paramlens, p_pred)))
-
-                res_n  = N(x_pred, p_pred)
-                res = normAC(res_f, res_n)
-
-                if res < residuals[end]
-                    if (res < residuals[end] / 4) && (α < 1)
-                        α *= 2
-                    end
-                    line_step = true
-                    copyto!(x, x_pred)
-
-                    # p = p_pred
-                    p  = clamp(p_pred, p_min, p_max)
-                else
-                    α /= 2
-                end
-            end
-            # we put back the initial value
-            α = α0
-        else
-            minus!(x, u)
-            p = clamp(p - up, p_min, p_max)
-            copyto!(res_f, residual(prob, x, _set_param(par, paramlens, p)))
-            res_n  = N(x, p); res = normAC(res_f, res_n)
-        end
-
+        # Compute residual norm
+        res = normAC(res_f, res_N)
         push!(residuals, res)
         step += 1
 
@@ -493,9 +452,93 @@ function newton_palc(iter::AbstractContinuationIterable,
     flag = (residuals[end] < tol) & callback((;x, res_f, residual = res, step, contparams, p, residuals, options = (;linsolver)); fromNewton = false, kwargs...)
 
     return NonLinearSolution(BorderedArray(x, p),
-                            prob,
+                            iter.prob,
                             residuals,
                             flag,
                             step,
                             itlineartot)
 end
+
+# Nonlinear system for PALC newton method
+function palc_func(u, iter, state, dotθ)
+    # Get variables
+    prob    = iter.prob
+    θ       = getθ(iter)
+    z0      = getsolution(state)
+    τ0      = state.τ
+    par     = getparams(prob)
+    plens   = getlens(prob)
+    @unpack z_pred, ds = state 
+
+    # Get state and parameter
+    x, p = get_subvec_and_scalar(u)
+
+    # Evaluate residual
+    res_f = residual(prob, x, _set_param(par, plens, p))
+
+    # Evaluate arc length constraint
+    res_n = arcLengthEq(dotθ, minus(x, z0.u), p - z0.p, τ0.u, τ0.p, θ, ds)
+
+    # Form full residual and return
+    return [res_f; res_n]
+end
+
+function palc_jac(u, iter, state)
+    # Get variables
+    prob    = iter.prob
+    τ0      = state.τ
+    par     = getparams(prob)
+    plens   = getlens(prob)
+    @unpack z_pred, ds = state 
+
+    # Get state and parameter
+    x, p = get_subvec_and_scalar(u)
+
+    # Approximate dFdp
+    ϵ = getdelta(prob)
+    dFdp  = (residual(prob, x, _set_param(par, plens, p + ϵ)) .- 
+            residual(prob, x, _set_param(par, plens, p))) ./ ϵ
+
+    # Evaluate Jacobian
+    J = jacobian(prob, x, _set_param(par, plens, p))
+
+    # Form full Jacobian and return
+    J1 = [J; τ0.u']
+    J2 = [dFdp; τ0.p]
+    return [J1 J2]
+end
+
+# Utility functions to get state and parameter or residual and arclength constraint
+function get_subvec_and_scalar(u::SVector{N, T}) where {N,T}
+    x = u[StaticArrays.SUnitRange{1,N-1}()]
+    p = u[N]
+    return x, p
+end
+function get_subvec_and_scalar(u::MVector{N, T}) where {N,T}
+    x = u[StaticArrays.SUnitRange{1,N-1}()]
+    p = u[N]
+    return x, p
+end
+function get_subvec_and_scalar(u::AbstractArray{T}) where {T}
+    x = u[1:end-1]
+    p = u[end]
+    return x, p
+end
+
+# Utility function to get problem Jacobian and dFdp
+function get_submat_and_vec(mat::SMatrix{N,M,T,L}) where {N,M,T,L}
+    J = mat[StaticArrays.SUnitRange{1,N-1}(), StaticArrays.SUnitRange{1,M-1}()]
+    dFdp = mat[StaticArrays.SUnitRange{1,N-1}(), M]
+    return J, dFdp
+end
+function get_submat_and_vec(mat::MMatrix{N,M,T,L}) where {N,M,T,L}
+    J = mat[StaticArrays.SUnitRange{1,N-1}(), StaticArrays.SUnitRange{1,M-1}()]
+    dFdp = mat[StaticArrays.SUnitRange{1,N-1}(), M]
+    return J, dFdp
+end
+function get_submat_and_vec(mat::AbstractMatrix{T}) where {T}
+    J = mat[1:end-1, 1:end-1]
+    dFdp = mat[1:end-1, end]
+    return J, dFdp
+end
+

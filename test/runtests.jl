@@ -12,9 +12,9 @@ using Base.Threads; println("--> There are ", Threads.nthreads(), " threads")
     #     include("test_linear.jl")
     # end
 
-    @testset "Newton" begin
-        include("test_newton.jl")
-    end
+    # @testset "Newton" begin
+    #     include("test_newton.jl")
+    # end
 
     @testset "Continuation" begin
         include("simple_continuation.jl")

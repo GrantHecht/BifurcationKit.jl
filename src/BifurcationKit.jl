@@ -11,6 +11,7 @@ module BifurcationKit
     using LinearSolve
     using NonlinearSolve
     using ForwardDiff
+    using StaticArrays
 
 
     include("Problems.jl")
