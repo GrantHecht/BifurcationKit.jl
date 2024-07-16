@@ -486,6 +486,7 @@ end
 function palc_jac(u, iter, state)
     # Get variables
     prob    = iter.prob
+    θ       = getθ(iter)   
     τ0      = state.τ
     par     = getparams(prob)
     plens   = getlens(prob)
@@ -503,8 +504,10 @@ function palc_jac(u, iter, state)
     J = jacobian(prob, x, _set_param(par, plens, p))
 
     # Form full Jacobian and return
-    J1 = [J; τ0.u']
-    J2 = [dFdp; τ0.p]
+    dNdu = (θ/length(x))*τ0.u'
+    dNdp = (1.0 - θ)*τ0.p
+    J1 = [J; dNdu]
+    J2 = [dFdp; dNdp]
     return [J1 J2]
 end
 
