@@ -216,19 +216,19 @@ function gettangent!(state::AbstractContinuationState,
     τ = state.τ
     θ = getθ(it)
     T = eltype(it)
+    prob = it.prob
 
-    # dFdl = (F(z.u, z.p + ϵ) - F(z.u, z.p)) / ϵ
-    dFdl = residual(it.prob, state.z.u, setparam(it, state.z.p + ϵ))
-    minus!(dFdl, residual(it.prob, state.z.u, setparam(it, state.z.p)))
-    rmul!(dFdl, 1/ϵ)
+    # Compute dFdl
+    dFdl = ForwardDiff.derivative(
+        _p -> residual(prob, state.z.u, _set_param(getparams(prob), getlens(prob), _p)),
+        state.z.p,
+    )
 
     # compute jacobian at the current solution
     J = jacobian(it.prob, state.z.u, setparam(it, state.z.p))
 
     # extract tangent as solution of the above bordered linear system
-    τu, τp, flag, itl = getlinsolver(it)( it, state,
-                                        J, dFdl,
-                                        0*state.z.u, one(T)) # Right-hand side
+    τu, τp, flag, itl = getlinsolver(it)(it, state, J, dFdl, 0*state.z.u, one(T)) # Right-hand side
     ~flag && @warn "Linear solver failed to converge in tangent computation with type ::Bordered"
 
     # we scale τ in order to have ||τ||_θ = 1 and sign <τ, τold> = 1
@@ -389,11 +389,15 @@ function newton_palc(iter::AbstractContinuationIterable,
     @unpack tol, max_iterations, verbose, α, αmin, linesearch = contparams.newton_options
     @unpack p_min, p_max = contparams
 
+    # Define nonlinear function and jacobian
+    _palc_func(u,p) = palc_func(u, iter, state, dotθ)
+    _palc_jac(u, p) = palc_jac(u, iter, state)
+
+
     # Formulate the problem
     nlp = NonlinearProblem{false}(
         NonlinearFunction{false, SciMLBase.FullSpecialize}(
-            (u, p) -> palc_func(u, iter, state, dotθ); 
-            jac = (u, p) -> palc_jac(u, iter, state),
+            _palc_func; jac = _palc_jac,
         ),
         [state.z_pred.u; state.z_pred.p],
         nothing,
@@ -495,10 +499,11 @@ function palc_jac(u, iter, state)
     # Get state and parameter
     x, p = get_subvec_and_scalar(u)
 
-    # Approximate dFdp
-    ϵ = getdelta(prob)
-    dFdp  = (residual(prob, x, _set_param(par, plens, p + ϵ)) .- 
-            residual(prob, x, _set_param(par, plens, p))) ./ ϵ
+    # Compute dFdp
+    dFdp = ForwardDiff.derivative(
+        _p -> residual(prob, x, _set_param(par, plens, _p)),
+        p,
+    )
 
     # Evaluate Jacobian
     J = jacobian(prob, x, _set_param(par, plens, p))
