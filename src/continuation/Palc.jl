@@ -380,7 +380,7 @@ function newton_palc(iter::AbstractContinuationIterable,
                     dotθ = getdot(iter);
                     normN = norm,
                     callback = cb_default,
-                    sciml_linsolve = RFLUFactorization(),
+                    sciml_linsolve = SVDFactorization(),
                     sciml_linesearch = RobustNonMonotoneLineSearch(),
                     kwargs...)
     z0 = getsolution(state)
@@ -393,7 +393,7 @@ function newton_palc(iter::AbstractContinuationIterable,
     nlp = NonlinearProblem{false}(
         NonlinearFunction{false, SciMLBase.FullSpecialize}(
             (u, p) -> palc_func(u, iter, state, dotθ); 
-            #jac = (u, p) -> palc_jac(u, iter, state),
+            jac = (u, p) -> palc_jac(u, iter, state),
         ),
         [state.z_pred.u; state.z_pred.p],
         nothing,
